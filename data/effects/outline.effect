@@ -1,0 +1,239 @@
+// Outline per sorgenti con trasparenza (PNG/APNG/GIF/WebP animati).
+//
+// Motore a distance field (jump flooding):
+//   Seed      -> segna i pixel opachi (o trasparenti, per il contorno interno)
+//   Step      -> propaga il "seme piu' vicino" con passi 2^k
+//   Composite -> disegna ombra, bagliore, contorni e sorgente
+//
+// Le texture di campo (RGBA32F) contengono in .rg le coordinate in pixel del
+// seme piu' vicino (-1,-1 se nessuno). Colori in alpha premoltiplicata.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform texture2d field;
+uniform texture2d field_in;
+
+uniform float2 base_size;   // dimensione sorgente in px
+uniform float2 total_size;  // dimensione output (sorgente + 2*pad) in px
+uniform float2 pad;         // margine per lato in px
+
+uniform float step_px;      // passo del jump flooding
+uniform float seed_inside;  // 0: semi sui pixel opachi, 1: sui trasparenti
+
+uniform float out_t;        // spessore contorno esterno
+uniform float in_t;         // spessore contorno interno
+uniform float feather;      // sfumatura (>= 1)
+uniform float4 color1;      // rgb + opacita' contorno principale
+uniform float flow;         // 1: arcobaleno scorrevole (tinta in base all'angolo)
+uniform float flow_phase;   // fase 0..1 dell'arcobaleno scorrevole
+
+uniform float t2;           // spessore secondo contorno
+uniform float4 color2;
+
+uniform float glow_r;       // raggio bagliore
+uniform float4 glow_color;  // rgb + intensita'
+
+uniform float2 shadow_off;  // offset ombra in px
+uniform float shadow_blur;
+uniform float4 shadow_color;
+
+sampler_state linear_s {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+sampler_state point_s {
+	Filter   = Point;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSMain(VertData v_in)
+{
+	VertData v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+float dist_seed(float2 q, float2 s)
+{
+	if (s.x < 0.0)
+		return 10000.0;
+	return length(q - s);
+}
+
+float3 hue_rgb(float h)
+{
+	return saturate(abs(frac(h + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
+}
+
+float4 over(float4 top, float4 bot)
+{
+	return top + bot * (1.0 - top.a);
+}
+
+float4 PSSeed(VertData v_in) : TARGET
+{
+	float2 px = v_in.uv * total_size;
+	float2 suv = (px - pad) / base_size;
+	float a = 0.0;
+	if (suv.x >= 0.0 && suv.y >= 0.0 && suv.x <= 1.0 && suv.y <= 1.0)
+		a = image.Sample(linear_s, suv).a;
+
+	bool seed = (a >= 0.5);
+	if (seed_inside > 0.5)
+		seed = (a < 0.5);
+
+	if (seed)
+		return float4(px.x, px.y, 0.0, 1.0);
+	return float4(-1.0, -1.0, 0.0, 1.0);
+}
+
+float4 PSStep(VertData v_in) : TARGET
+{
+	float2 px = v_in.uv * total_size;
+	float2 best = field.Sample(point_s, v_in.uv).rg;
+	float bd = 1000000000.0;
+	if (best.x >= 0.0) {
+		float2 d0 = px - best;
+		bd = dot(d0, d0);
+	}
+
+	for (int j = -1; j <= 1; j++) {
+		for (int i = -1; i <= 1; i++) {
+			float2 q = px + float2(float(i), float(j)) * step_px;
+			if (q.x >= 0.0 && q.y >= 0.0 && q.x < total_size.x && q.y < total_size.y) {
+				float2 s = field.Sample(point_s, q / total_size).rg;
+				if (s.x >= 0.0) {
+					float2 d = px - s;
+					float dd = dot(d, d);
+					if (dd < bd) {
+						bd = dd;
+						best = s;
+					}
+				}
+			}
+		}
+	}
+	return float4(best.x, best.y, 0.0, 1.0);
+}
+
+float4 PSComposite(VertData v_in) : TARGET
+{
+	float2 px = v_in.uv * total_size;
+	float2 suv = (px - pad) / base_size;
+
+	float4 src = float4(0.0, 0.0, 0.0, 0.0);
+	if (suv.x >= 0.0 && suv.y >= 0.0 && suv.x <= 1.0 && suv.y <= 1.0)
+		src = image.Sample(linear_s, suv);
+
+	float2 s = field.Sample(point_s, v_in.uv).rg;
+	float D = dist_seed(px, s);
+	float reach = out_t + t2;
+
+	// colore del contorno principale: fisso, oppure arcobaleno che scorre
+	// attorno alla forma (tinta in base all'angolo dal centro)
+	float3 col1 = color1.rgb;
+	if (flow > 0.5) {
+		float2 dc = px - total_size * 0.5;
+		float ang = atan2(dc.y, dc.x) / 6.28318530718;
+		col1 = hue_rgb(frac(ang + flow_phase));
+	}
+
+	float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+
+	// ombra: silhouette (sorgente + contorni) traslata
+	if (shadow_color.a > 0.0) {
+		float2 q = px - shadow_off;
+		float Ds = 10000.0;
+		if (q.x >= 0.0 && q.y >= 0.0 && q.x < total_size.x && q.y < total_size.y) {
+			float2 ss = field.Sample(point_s, q / total_size).rg;
+			Ds = dist_seed(q, ss);
+		}
+		float sc = saturate((reach + 1.0 + shadow_blur - Ds) / max(shadow_blur, 1.0));
+		float sa = sc * shadow_color.a;
+		acc = over(float4(shadow_color.rgb * sa, sa), acc);
+	}
+
+	// bagliore oltre i contorni
+	if (glow_color.a > 0.0 && glow_r > 0.0) {
+		float g = saturate(1.0 - max(D - reach, 0.0) / glow_r);
+		float ga = g * g * glow_color.a;
+		acc = over(float4(glow_color.rgb * ga, ga), acc);
+	}
+
+	// secondo contorno (anello esterno)
+	if (t2 > 0.0 && color2.a > 0.0) {
+		float c2 = saturate(out_t + t2 + 1.0 - D);
+		float a2 = c2 * color2.a;
+		acc = over(float4(color2.rgb * a2, a2), acc);
+	}
+
+	// contorno principale esterno
+	if (out_t > 0.0 && color1.a > 0.0) {
+		float c1 = saturate((out_t + 1.0 - D) / feather);
+		float a1 = c1 * color1.a;
+		acc = over(float4(col1 * a1, a1), acc);
+	}
+
+	// contorno interno: ricolora i pixel vicini al bordo, alpha invariata
+	float4 base = src;
+	if (in_t > 0.0 && color1.a > 0.0) {
+		float2 si = field_in.Sample(point_s, v_in.uv).rg;
+		float DI = dist_seed(px, si);
+		float ci = saturate((in_t + 1.0 - DI) / feather) * color1.a;
+		float4 ink = float4(col1 * src.a, src.a);
+		base = lerp(src, ink, ci);
+	}
+
+	return over(base, acc);
+}
+
+technique Seed
+{
+	pass
+	{
+		vertex_shader = VSMain(v_in);
+		pixel_shader  = PSSeed(v_in);
+	}
+}
+
+technique Step
+{
+	pass
+	{
+		vertex_shader = VSMain(v_in);
+		pixel_shader  = PSStep(v_in);
+	}
+}
+
+technique Composite
+{
+	pass
+	{
+		vertex_shader = VSMain(v_in);
+		pixel_shader  = PSComposite(v_in);
+	}
+}
+
+// Copia della texture catturata da OBS (usata da obs_source_process_filter_end).
+float4 PSCopy(VertData v_in) : TARGET
+{
+	return image.Sample(linear_s, v_in.uv);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSMain(v_in);
+		pixel_shader  = PSCopy(v_in);
+	}
+}
