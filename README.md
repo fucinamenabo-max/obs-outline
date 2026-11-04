@@ -17,10 +17,15 @@ Il calcolo usa un distance field su GPU (jump flooding): nessun buco su dettagli
 2. In *Filtri effetti* premi **+** → **Contorno (Outline)**.
 
 ## Installazione
-Esegui `obs-outline-<versione>-setup.exe`: rileva da solo la cartella di OBS (modificabile) e chiede di chiudere OBS se è aperto.
-Installazione manuale: copia `obs-outline.dll` in `obs-plugins\64bit\` e la cartella `data\` in `data\obs-plugins\obs-outline\`.
+Nessun installer: è uno zip da estrarre.
+1. Scarica `obs-outline-<versione>.zip` dalle **Release** e chiudi OBS.
+2. Premi `Win+R`, scrivi `%APPDATA%\obs-studio\plugins` e premi Invio (se la cartella non esiste, creala).
+3. Copia dentro la cartella `obs-outline` dello zip, in modo che resti `plugins\obs-outline\bin\64bit\obs-outline.dll`.
+4. Riapri OBS.
+
+Per disinstallare basta cancellare la cartella `obs-outline` da lì. Non servono permessi di amministratore.
 
 Licenza: GPL-2.0-or-later (come il template ufficiale).
 
 ## Lingue
-Interfaccia del filtro: italiano, inglese, spagnolo, francese, tedesco, cinese semplificato (segue la lingua di OBS, altrimenti inglese). Installer: italiano, inglese, spagnolo, francese, tedesco. Le traduzioni sono automatiche e non riviste da madrelingua. Per aggiungerne una basta un nuovo file in `data/locale/` con le stesse chiavi.
+Interfaccia del filtro: italiano, inglese, spagnolo, francese, tedesco, cinese semplificato (segue la lingua di OBS, altrimenti inglese). Le traduzioni sono automatiche e non riviste da madrelingua. Per aggiungerne una basta un nuovo file in `data/locale/` con le stesse chiavi.
