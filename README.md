@@ -20,13 +20,6 @@ Il calcolo usa un distance field su GPU (jump flooding): nessun buco su dettagli
 Esegui `obs-outline-<versione>-setup.exe`: rileva da solo la cartella di OBS (modificabile) e chiede di chiudere OBS se è aperto.
 Installazione manuale: copia `obs-outline.dll` in `obs-plugins\64bit\` e la cartella `data\` in `data\obs-plugins\obs-outline\`.
 
-## Compilare
-```
-cmake -S . -B build_vs17 -G "Visual Studio 17 2022" -A x64 -DCMAKE_SYSTEM_VERSION=10.0.22621 -DENABLE_FRONTEND_API=OFF -DENABLE_QT=OFF
-cmake --build build_vs17 --config Release
-```
-Installer: `ISCC.exe installer\obs-outline.iss` → `dist\obs-outline-<versione>-setup.exe` (richiede Inno Setup 6).
-
 Licenza: GPL-2.0-or-later (come il template ufficiale).
 
 ## Lingue
